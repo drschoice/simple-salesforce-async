@@ -182,6 +182,8 @@ class SFBulkType:
 
         if operation == 'query':
             result_json = await result.json()
+            if not result_json:
+                return []
             url_query_results = "{}{}{}" .format(url, '/', result_json[0])
             query_result = await async_call_salesforce(
                 url=url_query_results,
