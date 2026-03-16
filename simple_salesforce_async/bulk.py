@@ -1,12 +1,10 @@
 """ Classes for interacting with Salesforce Bulk API """
 
+import asyncio
 import json
 import aiohttp
-import concurrent.futures
 
 from collections import OrderedDict
-from time import sleep
-from functools import partial
 from .util import async_call_salesforce
 
 
@@ -183,16 +181,17 @@ class SFBulkType:
         )
 
         if operation == 'query':
-            url_query_results = "{}{}{}".format(url, '/', result.json()[0])
+            result_json = await result.json()
+            url_query_results = "{}{}{}" .format(url, '/', result_json[0])
             query_result = await async_call_salesforce(
                 url=url_query_results,
                 method='GET',
                 session=self.session,
                 headers=self.headers
             )
-            return query_result.json()
+            return await query_result.json()
 
-        return result.json()
+        return await result.json()
 
     # pylint: disable=R0913
     async def worker(self, batch, operation, wait=5):
@@ -202,14 +201,16 @@ class SFBulkType:
         and appends the results.
         """
 
-        batch_status = await self._get_batch(job_id=batch['jobId'], batch_id=batch['id'])['state']
+        batch_result = await self._get_batch(job_id=batch['jobId'], batch_id=batch['id'])
+        batch_status = batch_result['state']
 
         while batch_status not in ['Completed', 'Failed', 'Not Processed']:
-            sleep(wait)
-            batch_status = await self._get_batch(
+            await asyncio.sleep(wait)
+            batch_result = await self._get_batch(
                 job_id=batch['jobId'],
                 batch_id=batch['id']
-            )['state']
+            )
+            batch_status = batch_result['state']
 
         batch_results = await self._get_batch_results(
             job_id=batch['jobId'],
@@ -238,7 +239,6 @@ class SFBulkType:
             # Checks to prevent batch limit
             if len(data) >= 10000 and batch_size > 10000:
                 batch_size = 10000
-            pool = concurrent.futures.ThreadPoolExecutor()
 
             job = await self._create_job(
                 object_name=object_name,
@@ -253,8 +253,8 @@ class SFBulkType:
                 [data[i * batch_size:(i + 1) * batch_size]
                  for i in range((len(data) // batch_size + 1))] if i]
 
-            multi_thread_worker = partial(self.worker, operation=operation)
-            list_of_results = pool.map(multi_thread_worker, batches)
+            worker_tasks = [self.worker(batch, operation=operation, wait=wait) for batch in batches]
+            list_of_results = await asyncio.gather(*worker_tasks)
 
             results = [i for sublist in list_of_results for i in sublist]
 
@@ -272,11 +272,13 @@ class SFBulkType:
 
             await self._close_job(job_id=job['id'])
 
-            batch_status = self._get_batch(job_id=batch['jobId'], batch_id=batch['id'])['state']
+            batch_result = await self._get_batch(job_id=batch['jobId'], batch_id=batch['id'])
+            batch_status = batch_result['state']
 
             while batch_status not in ['Completed', 'Failed', 'Not Processed']:
-                sleep(wait)
-                batch_status = await self._get_batch(job_id=batch['jobId'], batch_id=batch['id'])['state']
+                await asyncio.sleep(wait)
+                batch_result = await self._get_batch(job_id=batch['jobId'], batch_id=batch['id'])
+                batch_status = batch_result['state']
 
             results = await self._get_batch_results(job_id=batch['jobId'], batch_id=batch['id'], operation=operation)
 
