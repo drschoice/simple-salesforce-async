@@ -151,15 +151,14 @@ async def AsyncSalesforceLogin(
             consumer_key is not None and \
             privatekey_file is not None:
         header = {'alg': 'RS256'}
-        expiration = datetime.utcnow() + timedelta(minutes=3)
         payload = {
             'iss': consumer_key,
             'sub': username,
             'aud': 'https://{domain}.salesforce.com'.format(domain=domain),
-            'exp': '{exp:.0f}'.format(
-                exp=time.mktime(expiration.timetuple()) +
-                    expiration.microsecond / 1e6
-            )
+            # Plain UTC unix time + 3 min. mktime(utcnow().timetuple()) was wrong:
+            # mktime interprets the tuple as local time, skewing exp by the tz offset
+            # and causing "invalid_grant: expired" on any non-UTC host.
+            'exp': int(time.time()) + 180,
         }
         with open(privatekey_file, 'rb') as key:
             assertion = jwt.encode(header, payload, key.read())
