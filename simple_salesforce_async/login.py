@@ -225,10 +225,12 @@ async def async_token_login(token_url, token_data, domain, consumer_key, headers
         token_url, data=token_data, headers=headers)
 
     try:
-        json_response = response.json()
+        # aiohttp's .json()/.text() are coroutines and must be awaited; content_type=None
+        # avoids ContentTypeError when Salesforce returns JSON without a json content-type.
+        json_response = await response.json(content_type=None)
     except JSONDecodeError:
         raise SalesforceAuthenticationFailed(
-            response.status, response.text
+            response.status, await response.text()
         )
 
     if response.status != 200:
